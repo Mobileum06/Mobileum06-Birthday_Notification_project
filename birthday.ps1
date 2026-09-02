@@ -13,7 +13,7 @@ $CsvFile = Join-Path $ScriptPath "birthday_list.csv"
 
 # IMPORTANT:
 # Replace this with your NEW Slack Incoming Webhook URL
-$SlackWebhookUrl = "https://hooks.slack.com/services/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"
+$SlackWebhookUrl = "https://hooks.slack.com/services/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"
 
 
 # ------------------------------------------------------------
