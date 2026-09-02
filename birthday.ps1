@@ -1,0 +1,279 @@
+# ============================================================
+# Birthday Notification System
+# CSV -> PowerShell -> Check Today's Date -> Slack Webhook
+# ============================================================
+
+# ------------------------------------------------------------
+# Configuration
+# ------------------------------------------------------------
+
+# CSV file is in the same folder as this PowerShell script
+$ScriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
+$CsvFile = Join-Path $ScriptPath "birthday_list.csv"
+
+# IMPORTANT:
+# Replace this with your NEW Slack Incoming Webhook URL
+$SlackWebhookUrl = "https://hooks.slack.com/services/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"
+
+
+# ------------------------------------------------------------
+# Start
+# ------------------------------------------------------------
+
+Write-Host ""
+Write-Host "==================================================" -ForegroundColor Cyan
+Write-Host "       BIRTHDAY NOTIFICATION SYSTEM" -ForegroundColor Cyan
+Write-Host "==================================================" -ForegroundColor Cyan
+
+# Today's date
+$Today = Get-Date
+
+Write-Host ""
+Write-Host "Today's Date : $($Today.ToString('yyyy-MM-dd'))" -ForegroundColor White
+Write-Host "CSV File     : $CsvFile" -ForegroundColor White
+Write-Host ""
+
+
+# ------------------------------------------------------------
+# Check CSV file
+# ------------------------------------------------------------
+
+if (-not (Test-Path $CsvFile)) {
+
+    Write-Host "ERROR: birthday_list.csv not found!" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Expected location:" -ForegroundColor Red
+    Write-Host $CsvFile -ForegroundColor Red
+
+    exit 1
+}
+
+
+# ------------------------------------------------------------
+# Check Slack Webhook configuration
+# ------------------------------------------------------------
+
+if (
+    [string]::IsNullOrWhiteSpace($SlackWebhookUrl) -or
+    $SlackWebhookUrl -eq "YOUR_NEW_WEBHOOK_URL"
+) {
+
+    Write-Host "ERROR: Slack Webhook URL is not configured." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Please update this line in the script:" -ForegroundColor Yellow
+    Write-Host '$SlackWebhookUrl = "YOUR_NEW_WEBHOOK_URL"' -ForegroundColor Yellow
+
+    exit 1
+}
+
+
+# ------------------------------------------------------------
+# Read CSV
+# ------------------------------------------------------------
+
+try {
+
+    $Birthdays = Import-Csv -Path $CsvFile -ErrorAction Stop
+
+}
+catch {
+
+    Write-Host "ERROR: Unable to read CSV file." -ForegroundColor Red
+    Write-Host $_.Exception.Message -ForegroundColor Red
+
+    exit 1
+}
+
+
+# ------------------------------------------------------------
+# Validate CSV
+# ------------------------------------------------------------
+
+if ($null -eq $Birthdays -or $Birthdays.Count -eq 0) {
+
+    Write-Host "ERROR: CSV file is empty." -ForegroundColor Red
+    exit 1
+}
+
+
+# ------------------------------------------------------------
+# Birthday processing
+# ------------------------------------------------------------
+
+$BirthdayFound = $false
+$BirthdayCount = 0
+$NotificationSuccessCount = 0
+$NotificationFailedCount = 0
+
+
+foreach ($Person in $Birthdays) {
+
+    # --------------------------------------------------------
+    # Check Name
+    # --------------------------------------------------------
+
+    if ([string]::IsNullOrWhiteSpace($Person.Name)) {
+
+        Write-Host "WARNING: Name is empty. Skipping row." -ForegroundColor Yellow
+        continue
+    }
+
+
+    # --------------------------------------------------------
+    # Check DateOfBirth
+    # CSV column = DateOfBirth
+    # --------------------------------------------------------
+
+    if ([string]::IsNullOrWhiteSpace($Person.DateOfBirth)) {
+
+        Write-Host "WARNING: DateOfBirth is empty for $($Person.Name). Skipping." -ForegroundColor Yellow
+        continue
+    }
+
+
+    # --------------------------------------------------------
+    # Convert DateOfBirth
+    #
+    # CSV format:
+    # dd-MM-yyyy
+    #
+    # Example:
+    # 02-09-1995
+    # --------------------------------------------------------
+
+    try {
+
+        $DOB = [datetime]::ParseExact(
+            $Person.DateOfBirth.Trim(),
+            "dd-MM-yyyy",
+            [System.Globalization.CultureInfo]::InvariantCulture
+        )
+
+    }
+    catch {
+
+        Write-Host ""
+        Write-Host "WARNING: Invalid DateOfBirth for $($Person.Name)" -ForegroundColor Yellow
+        Write-Host "Value: $($Person.DateOfBirth)" -ForegroundColor Yellow
+        Write-Host "Expected format: dd-MM-yyyy" -ForegroundColor Yellow
+        Write-Host ""
+
+        continue
+    }
+
+
+    # --------------------------------------------------------
+    # Compare Month + Day
+    # --------------------------------------------------------
+
+    if (
+        ($DOB.Month -eq $Today.Month) -and
+        ($DOB.Day -eq $Today.Day)
+    ) {
+
+        $BirthdayFound = $true
+        $BirthdayCount++
+
+
+        # ----------------------------------------------------
+        # Display Birthday Information
+        # ----------------------------------------------------
+
+        Write-Host ""
+        Write-Host "========================================" -ForegroundColor Green
+        Write-Host "BIRTHDAY FOUND!" -ForegroundColor Green
+        Write-Host "Name : $($Person.Name)" -ForegroundColor Green
+        Write-Host "DOB  : $($Person.DateOfBirth)" -ForegroundColor Green
+        Write-Host "========================================" -ForegroundColor Green
+        Write-Host ""
+
+
+        # ----------------------------------------------------
+        # Create Slack Message
+        # ----------------------------------------------------
+
+        $SlackPayload = @{
+            text = "🎂 Happy Birthday $($Person.Name)! 🎉`nWishing you a wonderful day and a great year ahead!"
+        }
+
+
+        try {
+
+            # Convert message to JSON
+            $SlackMessage = $SlackPayload | ConvertTo-Json -Compress
+
+
+            # ------------------------------------------------
+            # Send message to Slack
+            # ------------------------------------------------
+
+            $Response = Invoke-RestMethod `
+                -Uri $SlackWebhookUrl `
+                -Method Post `
+                -ContentType "application/json; charset=utf-8" `
+                -Body ([System.Text.Encoding]::UTF8.GetBytes($SlackMessage)) `
+                -ErrorAction Stop
+
+
+            # ------------------------------------------------
+            # Check Slack response
+            # ------------------------------------------------
+
+            if ($Response -eq "ok") {
+
+                $NotificationSuccessCount++
+
+                Write-Host "SUCCESS: Slack notification sent!" -ForegroundColor Green
+
+            }
+            else {
+
+                $NotificationFailedCount++
+
+                Write-Host "WARNING: Slack returned unexpected response:" -ForegroundColor Yellow
+                Write-Host "$Response" -ForegroundColor Yellow
+
+            }
+
+        }
+        catch {
+
+            $NotificationFailedCount++
+
+            Write-Host "ERROR: Failed to send Slack notification." -ForegroundColor Red
+            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+
+        }
+    }
+}
+
+
+# ------------------------------------------------------------
+# No birthday found
+# ------------------------------------------------------------
+
+if (-not $BirthdayFound) {
+
+    Write-Host ""
+    Write-Host "No birthday found for today." -ForegroundColor Yellow
+}
+
+
+# ------------------------------------------------------------
+# Summary
+# ------------------------------------------------------------
+
+Write-Host ""
+Write-Host "==================================================" -ForegroundColor Cyan
+Write-Host "                    SUMMARY" -ForegroundColor Cyan
+Write-Host "==================================================" -ForegroundColor Cyan
+
+Write-Host "Date checked             : $($Today.ToString('yyyy-MM-dd'))"
+Write-Host "Birthday(s) found        : $BirthdayCount"
+Write-Host "Slack notifications sent : $NotificationSuccessCount"
+Write-Host "Slack notifications failed: $NotificationFailedCount"
+
+Write-Host "==================================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Script completed." -ForegroundColor Green
+Write-Host ""
